@@ -702,7 +702,9 @@ class ItemDetector:
         # conf 0.3：清單規則要連續 0.5 秒看到才算，偶發的誤框撐不過；0.5 時使用者自己訓的模型鞋子、標籤常漏（實測）
         import torch
         from ultralytics import YOLO
-        torch.set_num_threads(max(1, threads))
+        use_cuda = torch.cuda.is_available()
+        if not use_cuda:
+            torch.set_num_threads(max(1, threads))
         pt = YOLO(model_path)
         if imgsz is None:
             # 用訓練時的尺寸（固定桌面範圍是 960）；拿不到就 640
@@ -711,22 +713,31 @@ class ItemDetector:
             except Exception:
                 imgsz = 640
         self.conf = conf; self.imgsz = imgsz
-        self.backend = "pytorch"
+        self.device = "0" if use_cuda else "cpu"
+        self.half = bool(use_cuda)
+        self.backend = "cuda" if use_cuda else "pytorch"
         self.model = pt
-        ov = openvino_model(model_path, imgsz)
-        if ov is not None:
+        if use_cuda:
             try:
-                m = YOLO(ov, task="detect")
-                m.predict(np.zeros((imgsz, imgsz, 3), np.uint8), imgsz=imgsz, conf=conf, verbose=False)
-                self.model = m; self.backend = "openvino"
+                self.model.predict(np.zeros((imgsz, imgsz, 3), np.uint8), imgsz=imgsz, conf=conf, device=self.device, half=self.half, verbose=False)
             except Exception:
-                pass
+                self.half = False
+        else:
+            ov = openvino_model(model_path, imgsz)
+            if ov is not None:
+                try:
+                    m = YOLO(ov, task="detect")
+                    m.predict(np.zeros((imgsz, imgsz, 3), np.uint8), imgsz=imgsz, conf=conf, verbose=False)
+                    self.model = m; self.backend = "openvino"
+                except Exception:
+                    pass
         self.names = [self.model.names[i] for i in sorted(self.model.names)] if isinstance(self.model.names, dict) else list(self.model.names)
 
     def detect(self, crop_bgr) -> list[ItemHit]:
         if crop_bgr is None or crop_bgr.size == 0:
             return []
-        r = self.model.predict(crop_bgr, imgsz=self.imgsz, conf=self.conf, verbose=False)[0]
+        kw = {"device": self.device, "half": self.half} if self.backend == "cuda" else {}
+        r = self.model.predict(crop_bgr, imgsz=self.imgsz, conf=self.conf, verbose=False, **kw)[0]
         out = []
         for b in r.boxes:
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]

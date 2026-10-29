@@ -16,23 +16,27 @@ class ObjectDetector:
     def __init__(self, weights: str, prompts: list[str], imgsz: int = 640, conf: float = 0.15, threads: int | None = 2):
         if not os.path.isfile(weights):
             raise FileNotFoundError(f"找不到物件偵測權重：{os.path.abspath(weights)}")
-        if threads:
-            try:
-                import torch
+        use_cuda = False
+        try:
+            import torch
+            use_cuda = torch.cuda.is_available()
+            if threads and not use_cuda:
                 torch.set_num_threads(int(threads))   # 留 CPU 給 MediaPipe 與畫面
-            except Exception:
-                pass
+        except Exception:
+            pass
         from ultralytics import YOLO
         self.model = YOLO(weights)
         self.prompts = list(prompts)
         self.model.set_classes(self.prompts)
         self.imgsz = imgsz
         self.conf = conf
+        self.device = "0" if use_cuda else "cpu"
         self.last_ms = 0.0
 
     def detect(self, frame_bgr) -> list[Detection]:
         t0 = time.perf_counter()
-        r = self.model.predict(frame_bgr, imgsz=self.imgsz, conf=self.conf, verbose=False)[0]
+        kw = {"device": self.device} if self.device != "cpu" else {}
+        r = self.model.predict(frame_bgr, imgsz=self.imgsz, conf=self.conf, verbose=False, **kw)[0]
         out: list[Detection] = []
         for b in r.boxes:
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0]]

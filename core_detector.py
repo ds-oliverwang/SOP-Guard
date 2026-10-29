@@ -35,6 +35,8 @@ MONITOR_TORCH_THREADS = 1        # 監控時 PyTorch（YOLO-World）只用 1 個
 def limit_torch_threads(n: int = MONITOR_TORCH_THREADS) -> None:
     try:
         import torch
+        if torch.cuda.is_available():
+            return
         torch.set_num_threads(max(1, int(n)))
     except Exception:
         pass
@@ -715,7 +717,14 @@ class SOPStateMachine:
 
 # ---------------------------------------------------------------- 開發預覽視窗
 
-_CJK_FONT_PATHS = [r"C:\Windows\Fonts\msjh.ttc", r"C:\Windows\Fonts\msjhbd.ttc", r"C:\Windows\Fonts\mingliu.ttc"]
+_CJK_FONT_PATHS = [
+    r"C:\Windows\Fonts\msjh.ttc", r"C:\Windows\Fonts\msjhbd.ttc", r"C:\Windows\Fonts\mingliu.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/arphic/uming.ttc",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+]
 _cjk_fonts: dict[int, object] = {}
 
 

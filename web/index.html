@@ -169,13 +169,17 @@
   }
 
   async function poll() {
-    try { render(await api("/api/state")); } catch (e) { $("status").textContent = "連不上伺服器"; }
+    try {
+      if (!$("project").options.length) await loadProjects();
+      render(await api("/api/state"));
+    } catch (e) { $("status").textContent = "連不上伺服器"; }
     setTimeout(poll, 500);
   }
 
   $("btnStart").onclick = async () => {
     $("err").textContent = "";
     if (running) { await api("/api/stop", {}); streamOn = false; return; }
+    if (!$("project").value) await loadProjects();
     const src = document.querySelector("input[name=src]:checked").value;
     const d = await api("/api/start", { project: $("project").value, source: src });
     if (!d.ok) $("err").textContent = d.error || "啟動失敗";

@@ -64,6 +64,15 @@ class MonitorService:
     def start(self, project_name: str, source_kind: str = "demo", source: str | None = None) -> None:
         if self.running:
             raise ValueError("監控已在執行中，請先停止")
+        if not project_name or not project_name.strip():
+            from project_store import list_projects
+            for n in list_projects():
+                try:
+                    if load_project(n).steps:
+                        project_name = n
+                        break
+                except Exception:
+                    pass
         try:
             project = load_project(project_name)
         except Exception as e:
@@ -191,8 +200,12 @@ class MonitorService:
             scene = SceneTracker(p.anchors, tuple(p.work_area) if p.work_area else None)
             if p.anchors:
                 self._set_loading("載入中 2/4：物件偵測模型（YOLO）…")
+                import numpy as np
                 from object_detector import AsyncDetector, ObjectDetector
-                async_det = AsyncDetector(ObjectDetector(YOLO_WEIGHTS, [a.prompt for a in p.anchors]))
+                obj_det = ObjectDetector(YOLO_WEIGHTS, [a.prompt for a in p.anchors])
+                if getattr(obj_det, "device", "cpu") != "cpu":
+                    obj_det.detect(np.zeros((64, 64, 3), dtype=np.uint8))
+                async_det = AsyncDetector(obj_det)
             gesture = None
             if p.gesture_model:
                 from gesture_classifier import GestureClassifier, GestureStream, hand_frame_features
@@ -204,6 +217,9 @@ class MonitorService:
                 state_runner = None
             else:
                 state_runner.lib._ensure_vecs()
+                if getattr(state_runner.items, "backend", "") == "cuda":
+                    import numpy as np
+                    state_runner.items.detect(np.zeros((64, 64, 3), dtype=np.uint8))
             self._set_loading("載入中 4/4：開啟" + ("相機" if is_camera else "示範影片") + "…")
             src = CameraSource(source, p.resolution[0], p.resolution[1]) if is_camera else VideoFileSource(source)
         except Exception as e:
@@ -268,6 +284,8 @@ class MonitorService:
                     if state_runner is not None:
                         state_runner.stream.reset()
                 frames += 1
+                if frames == 1:
+                    wall0 = time.perf_counter() - max(t_now, 1.0 / float(p.fps or 30.0))
                 el = time.perf_counter() - wall0; rec_fps = frames / el if el else 0.0
                 with self._lock:
                     self._live = (ctx, fsm, state_runner, rec_fps)

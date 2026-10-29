@@ -345,3 +345,74 @@ def test_apply_item_steps_hand_steps_replace_item_and_add_anchor(tmp_path):
     assert shoe.prompt == "shoe" and shoe.max_count == 2 and shoe.max_age_sec == 2.5
     s.remove_hand_step("檢查鞋舌"); training.apply_item_steps(load_project(str(d)), s.order)
     assert [st.type for st in load_project(str(d)).steps] == ["item", "item"]
+
+
+def test_gpu_path_selection_and_cpu_fallback(monkeypatch, tmp_path):
+    """確認有 GPU 時 ItemDetector 走 PyTorch + CUDA（不轉 OpenVINO）、ObjectDetector 指定 device='0'、limit_torch_threads 不壓成 1；
+    沒有 GPU 時維持原本的 OpenVINO 與 CPU 行為。"""
+    import torch
+    import ultralytics
+    import core_detector as cd
+    import item_recognizer as ir
+    import object_detector as od
+
+    ov_calls = []
+    predict_calls = []
+
+    class DummyBox:
+        def __init__(self):
+            self.cls = torch.tensor([0])
+            self.conf = torch.tensor([0.85])
+            self.xyxy = torch.tensor([[10.0, 20.0, 50.0, 60.0]])
+
+    class DummyResult:
+        def __init__(self):
+            self.boxes = [DummyBox()]
+
+    class DummyYOLO:
+        def __init__(self, path, task=None):
+            self.path = path
+            self.ckpt = {"train_args": {"imgsz": 960}}
+            self.names = {0: "藍盒"}
+
+        def set_classes(self, prompts):
+            self.prompts = prompts
+
+        def predict(self, img, **kw):
+            predict_calls.append(kw)
+            return [DummyResult()]
+
+    monkeypatch.setattr(ultralytics, "YOLO", DummyYOLO)
+    monkeypatch.setattr(ir, "openvino_model", lambda pt, sz: (ov_calls.append((pt, sz)) or str(tmp_path / "ov")))
+
+    # 1. 有 GPU (CUDA available = True)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    orig_threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+    cd.limit_torch_threads(1)
+    assert torch.get_num_threads() == 4        # 有 GPU 時不壓成 1 執行緒
+
+    det_gpu = ir.ItemDetector("dummy.pt")
+    assert det_gpu.backend == "cuda" and det_gpu.device == "0" and det_gpu.half is True
+    assert ov_calls == []                      # 有 GPU 時不轉 OpenVINO
+    predict_calls.clear()
+    hits = det_gpu.detect(np.zeros((100, 100, 3), np.uint8))
+    assert len(hits) == 1 and hits[0].name == "藍盒"
+    assert predict_calls[-1].get("device") == "0" and predict_calls[-1].get("half") is True
+
+    w = tmp_path / "w.pt"; w.write_bytes(b"x")
+    obj_gpu = od.ObjectDetector(str(w), ["blue box"])
+    assert obj_gpu.device == "0"
+    predict_calls.clear()
+    obj_gpu.detect(np.zeros((100, 100, 3), np.uint8))
+    assert predict_calls[-1].get("device") == "0"
+
+    # 2. 無 GPU (CUDA available = False) → 維持原本 OpenVINO / CPU 行為
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    cd.limit_torch_threads(1)
+    assert torch.get_num_threads() == 1
+    det_cpu = ir.ItemDetector("dummy.pt")
+    assert det_cpu.backend == "openvino" and len(ov_calls) == 1
+    obj_cpu = od.ObjectDetector(str(w), ["blue box"])
+    assert obj_cpu.device == "cpu"
+    torch.set_num_threads(orig_threads)
