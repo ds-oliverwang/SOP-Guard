@@ -792,7 +792,9 @@ def draw_texts(frame, items: list[tuple[int, int, str, tuple[int, int, int], int
     return frame
 
 
-def _draw_dev_overlay(frame, project: Project, fsm: SOPStateMachine, ctx: FrameContext, fps_text: str, state_runner=None):
+def _draw_dev_overlay(frame, project: Project, fsm: SOPStateMachine, ctx: FrameContext, fps_text: str, state_runner=None,
+                      boxes_only: bool = False):
+    """boxes_only=True：只畫框與框上名稱，不畫下方步驟面板、警告大字、fps（網頁版用，這些資訊改由網頁顯示）。"""
     snap = fsm.snapshot()
     scale = 960 / max(frame.shape[:2])
     if scale < 1.0:
@@ -878,6 +880,8 @@ def _draw_dev_overlay(frame, project: Project, fsm: SOPStateMachine, ctx: FrameC
             panel.append((14, y_next, f"盒子 {age:.1f} 秒沒看到（{box_spec.max_age_sec:.0f} 秒後視為拿走）", (0, 200, 255), 20)); y_next += 30
     if not snap["armed"] and not snap["alert_active"]:
         panel.append((14, y_next, "本輪已結束，等待下一輪開始", (0, 200, 255), 20)); y_next += 30
+    if boxes_only:
+        return draw_texts(frame, texts)
     panel_h = y_next + 6
     top = max(0, fh - panel_h)
     overlay = frame.copy()

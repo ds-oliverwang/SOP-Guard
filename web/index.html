@@ -5,98 +5,169 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SOP-Guard 監控</title>
 <style>
-  :root { --bg:#f3f4f6; --card:#fff; --text:#1f2937; --muted:#6b7280; --ok:#16a34a; --warn:#dc2626; --accent:#2563eb; --line:#e5e7eb; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font-family:"Microsoft JhengHei","Noto Sans TC",system-ui,sans-serif; font-size:16px; }
-  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--card); border-bottom:1px solid var(--line); }
-  header h1 { font-size:20px; margin:0; }
-  #status { color:var(--muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  /* 整頁固定在瀏覽器視窗大小內：畫面依剩餘空間縮放，右欄內容太多時在右欄裡面捲動，不把整頁撐大 */
-  html, body { height:100%; }
-  body { display:flex; flex-direction:column; overflow:hidden; }
-  header { flex:none; }
-  main { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 380px; grid-template-rows:minmax(0,1fr); gap:12px; padding:12px 16px; }
-  .video { background:#111; border-radius:8px; display:flex; align-items:center; justify-content:center; min-height:0; min-width:0; position:relative; overflow:hidden; }
-  .video img { max-width:100%; max-height:100%; object-fit:contain; display:block; }
-  .video .hint { color:#bbb; padding:24px; text-align:center; }
-  .panel { display:flex; flex-direction:column; gap:12px; min-height:0; overflow-y:auto; }
-  .panel .card.events { flex:1 1 auto; min-height:120px; display:flex; flex-direction:column; }
-  .panel .card.events ul.events { flex:1; max-height:none; }
-  @media (max-width: 900px) {                       /* 手機直排：恢復整頁捲動 */
-    body { overflow:auto; display:block; height:auto; }
-    main { grid-template-columns:1fr; grid-template-rows:auto; }
-    .video { min-height:240px; } .video img { max-height:70vh; }
-    .panel { overflow:visible; }
+  :root {
+    --bg:#e4e7eb; --panel:#fff; --line:#c5ccd3; --soft:#eceff2;
+    --text:#1b2127; --muted:#6b7682; --dim:#a0a8b0;
+    --ok:#1e8e3e; --ok-fill:#2e9d4b; --ok-soft:#e6f4e9;
+    --warn:#c62828; --warn-fill:#d32f2f;
+    --att:#9a5c00; --att-fill:#f2a900; --att-soft:#fff4d9;
+    --idle-fill:#7b8794; --accent:#1f5fa8;
   }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; }
-  .card h2 { font-size:15px; margin:0 0 8px; color:var(--muted); font-weight:600; }
-  select, button { font:inherit; }
-  select { width:100%; padding:10px; border:1px solid var(--line); border-radius:6px; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
-  .big { width:100%; padding:14px; font-size:18px; border:0; border-radius:8px; color:#fff; background:var(--accent); cursor:pointer; }
-  .big:disabled { background:#9ca3af; cursor:default; }
-  .big.stop { background:#4b5563; }
-  .big.reset { background:var(--warn); font-size:22px; padding:18px; }
-  .small { padding:8px 12px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; }
-  .counts { display:flex; gap:16px; font-size:18px; }
-  .counts b { font-size:26px; }
-  .counts .bad b { color:var(--warn); }
-  ul.steps { list-style:none; margin:0; padding:0; }
-  ul.steps li { display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid var(--line); font-size:18px; }
-  ul.steps li:last-child { border-bottom:0; }
-  .mark { width:28px; height:28px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; color:#fff; font-weight:700; background:#d1d5db; flex:none; }
-  .mark.done { background:var(--ok); }
-  .mark.active { background:#f59e0b; }
-  .prog { margin-left:auto; color:var(--muted); font-size:14px; }
-  #alert { display:none; background:#fee2e2; border:2px solid var(--warn); color:#991b1b; font-size:22px; font-weight:700; padding:12px; border-radius:8px; }
-  ul.events { list-style:none; margin:0; padding:0; max-height:220px; overflow:auto; font-size:14px; }
-  ul.events li { padding:4px 2px; border-bottom:1px solid var(--line); color:var(--muted); }
-  ul.events li.alert { color:var(--warn); font-weight:600; }
-  ul.events li.done { color:var(--ok); }
-  label.radio { display:inline-flex; align-items:center; gap:6px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; cursor:pointer; }
-  .err { color:var(--warn); margin-top:8px; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:"Microsoft JhengHei","Noto Sans TC",sans-serif; font-size:15px;
+         display:flex; flex-direction:column; overflow:hidden; }
+  button, select { font:inherit; color:inherit; }
+  .n { font-variant-numeric:tabular-nums; }
+
+  /* 控制列 */
+  .bar { flex:none; display:flex; align-items:center; gap:8px; padding:5px 10px; background:#2b333c; color:#e8ecef; font-size:14px; }
+  .bar .name { font-weight:700; margin-right:8px; }
+  .bar select { background:#fff; color:var(--text); border:1px solid #6b7682; padding:3px 6px; min-width:200px; }
+  .bar label { display:inline-flex; align-items:center; gap:3px; cursor:pointer; }
+  .bar .sp { flex:1; }
+  .bar button, .bar a { background:#eef1f4; color:var(--text); border:1px solid #6b7682; padding:4px 12px; cursor:pointer; text-decoration:none; font-size:14px; }
+  .bar #btnStart { background:var(--accent); color:#fff; border-color:#174a83; font-weight:700; min-width:96px; }
+  .bar #btnStart.stop { background:#5a6570; border-color:#3d464f; }
+  .bar button:disabled { opacity:.5; }
+  #err { color:#ffb4b4; }
+
+  /* 狀態列 */
+  .status { flex:none; display:grid; grid-template-columns:minmax(0,1fr) 200px 130px 150px 150px 150px; margin:8px 8px 0; background:var(--panel); border:1px solid var(--line); }
+  .lamp { display:flex; flex-direction:column; justify-content:center; padding:8px 16px; background:var(--idle-fill); color:#fff; min-height:78px; }
+  .lamp.run { background:var(--ok-fill); } .lamp.wait { background:var(--att-fill); color:#2a1d00; } .lamp.alert { background:var(--warn-fill); }
+  .lamp .t { font-size:28px; font-weight:700; line-height:1.2; }
+  .lamp .d { font-size:17px; margin-top:2px; }
+  .cell { border-left:1px solid var(--soft); padding:8px 12px; display:flex; flex-direction:column; justify-content:center; gap:2px; }
+  .cell .k { font-size:13px; color:var(--muted); }
+  .cell .v { font-size:28px; font-weight:700; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cell .v.txt { font-size:21px; }
+  .cell .s { font-size:12px; color:var(--muted); white-space:nowrap; }
+  .cell .v small { font-size:14px; font-weight:400; color:var(--muted); margin-left:2px; }
+  .cell.late .v { color:var(--att); } .cell.over .v { color:var(--warn); }
+  .okc { color:var(--ok); } .badc { color:var(--warn); }
+
+  /* 主體 */
+  .body { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1fr); gap:8px; padding:8px; }
+  .pane { background:var(--panel); border:1px solid var(--line); display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  .title { padding:10px 14px 6px; font-size:14px; font-weight:700; color:var(--muted); display:flex; justify-content:space-between; align-items:baseline; }
+  .title .sub { font-weight:400; font-size:13px; }
+
+  .video { position:relative; flex:1; min-height:0; background:#111; display:flex; align-items:center; justify-content:center; border:0; }
+  .video img { max-width:100%; max-height:100%; object-fit:contain; display:block; }
+  .video .hint { color:#aab3bc; text-align:center; line-height:1.8; padding:16px; }
+  .alarm { display:none; position:absolute; left:0; right:0; top:0; background:var(--warn-fill); color:#fff; padding:10px 12px; align-items:center; gap:10px; }
+  .alarm.on { display:flex; }
+  .alarm b { flex:1; font-size:21px; }
+  .alarm button { background:#fff; color:var(--warn); border:0; padding:9px 16px; font-size:17px; font-weight:700; cursor:pointer; }
+  .video.alerting { box-shadow:inset 0 0 0 4px var(--warn-fill); }
+
+  /* 步驟 */
+  ol.steps { list-style:none; margin:0; padding:0 14px 10px; }
+  ol.steps li { display:grid; grid-template-columns:30px 1fr auto; align-items:center; column-gap:12px; min-height:52px; border-bottom:1px solid var(--soft); }
+  ol.steps li:last-child { border-bottom:0; }
+  ol.steps .no { width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-size:14px; color:var(--muted); border:1px solid var(--line); }
+  ol.steps .name { font-size:19px; }
+  ol.steps .opt { font-size:12px; color:var(--dim); margin-left:6px; }
+  ol.steps .tag { font-size:15px; text-align:right; white-space:nowrap; }
+  ol.steps .meter { grid-column:2 / 4; height:4px; background:var(--soft); margin:-8px 0 8px; }
+  ol.steps .meter i { display:block; height:100%; background:var(--att-fill); }
+  ol.steps li.done .no { background:var(--ok-fill); border-color:var(--ok-fill); color:#fff; }
+  ol.steps li.done .tag { color:var(--ok); }
+  ol.steps li.doing { background:var(--att-soft); margin:0 -14px; padding:0 14px; }
+  ol.steps li.doing .no { background:var(--att-fill); border-color:var(--att-fill); color:#2a1d00; font-weight:700; }
+  ol.steps li.doing .tag { color:var(--att); font-weight:700; }
+  ol.steps li.todo .name { color:var(--muted); }
+  .none { color:var(--dim); font-size:14px; padding:4px 14px; }
+
+  /* 右欄 */
+  .block { padding-bottom:12px; }
+  .block + .block { border-top:1px solid var(--soft); }
+  .runs { display:flex; gap:3px; flex-wrap:wrap; padding:0 14px; }
+  .runs i { width:16px; height:20px; background:var(--ok-fill); color:#fff; font-style:normal; font-size:12px; font-weight:700;
+            display:flex; align-items:center; justify-content:center; }
+  .runs i.bad { background:var(--warn-fill); } .runs i.other { background:var(--att-fill); color:#2a1d00; }
+  /* 錯誤次數圖：每個必要步驟一條，次數直接寫在旁邊 */
+  .chart { padding:0 14px; }
+  .chart .r { display:grid; grid-template-columns:100px 1fr 44px; align-items:center; gap:10px; height:28px; font-size:15px; }
+  .chart .r .lbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chart .r .track { height:14px; position:relative; border-left:1px solid var(--line); }
+  .chart .r .track i { position:absolute; left:0; top:0; bottom:0; background:var(--warn-fill); border-radius:0 3px 3px 0; }
+  .chart .r .c { text-align:right; font-variant-numeric:tabular-nums; font-weight:700; }
+  .chart .r.zero .lbl, .chart .r.zero .c { color:var(--dim); font-weight:400; }
+  .kinds { font-size:13px; color:var(--muted); padding:4px 14px 0; }
+  ul.warns { list-style:none; margin:0; padding:0 14px; }
+  ul.warns li { font-size:14px; padding:6px 10px; margin-bottom:4px; background:var(--att-soft); color:#6b4200; border-left:4px solid var(--att-fill); }
+
+  @media (max-width: 1000px) {
+    body { overflow:auto; display:block; height:auto; }
+    .status { grid-template-columns:repeat(5, 1fr); }
+    .lamp { grid-column:1 / -1; } .cell:nth-child(2) { border-left:0; }
+    .body { grid-template-columns:minmax(0,1fr); }
+    .video { min-height:260px; } .video img { max-height:65vh; }
+    .bar { flex-wrap:wrap; } .bar select { flex:1; min-width:0; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>SOP-Guard 監控</h1>
-  <div id="status">尚未啟動</div>
-  <a class="small" href="/label" style="text-decoration:none;color:var(--text)">標記物品</a>
-  <button class="small" id="btnShot">存截圖</button>
-</header>
-<main>
-  <div class="video">
-    <img id="stream" alt="" style="display:none">
-    <div class="hint" id="hint">選好專案後按「啟動監控」，第一次載入約 10～30 秒。</div>
-  </div>
-  <div class="panel">
-    <div id="alert"></div>
-    <button class="big reset" id="btnReset" style="display:none">解除警告</button>
-    <div class="card">
-      <h2>專案與來源</h2>
-      <select id="project"></select>
-      <div class="row">
-        <label class="radio"><input type="radio" name="src" value="demo" checked> 示範影片</label>
-        <label class="radio"><input type="radio" name="src" value="camera"> 相機</label>
-      </div>
-      <div class="row"><button class="big" id="btnStart">啟動監控</button></div>
-      <div class="err" id="err"></div>
-    </div>
-    <div class="card">
-      <h2>這一輪</h2>
-      <div class="counts"><div>完成 <b id="cycles">0</b> 輪</div><div class="bad">漏做 <b id="bad">0</b> 輪</div></div>
-      <ul class="steps" id="steps"></ul>
-    </div>
-    <div class="card events">
-      <h2>事件</h2>
-      <ul class="events" id="events"></ul>
+<div class="bar">
+  <span class="name">SOP-Guard</span>
+  <select id="project" aria-label="專案"></select>
+  <label><input type="radio" name="src" value="demo" checked>示範影片</label>
+  <label><input type="radio" name="src" value="camera">相機</label>
+  <button id="btnStart">啟動監控</button>
+  <span id="err"></span>
+  <span class="sp"></span>
+  <a href="/label">標記物品</a>
+  <button id="btnShot">存截圖</button>
+</div>
+
+<div class="status">
+  <div class="lamp" id="lamp"><div class="t" id="nowTitle">尚未啟動</div><div class="d" id="nowDetail">選好專案與來源，按「啟動監控」</div></div>
+  <div class="cell"><span class="k">目前型體</span><span class="v txt" id="modelName">–</span><span class="s n" id="modelInfo"></span></div>
+  <div class="cell" id="cellTime"><span class="k">本輪用時</span><span class="v n" id="timerVal">–</span><span class="s n" id="timerLimit"></span></div>
+  <div class="cell" id="cellAvg"><span class="k">平均完成時間</span><span class="v n" id="avgDur">–</span><span class="s n" id="durInfo"></span></div>
+  <div class="cell"><span class="k">完成 : 錯誤</span><span class="v n"><span class="okc" id="cycles">0</span> : <span class="badc" id="bad">0</span></span><span class="s n" id="badRate"></span></div>
+  <div class="cell"><span class="k n" id="today">今天</span><span class="v n" id="clock">--:--:--</span><span class="s n" id="runFor"></span></div>
+</div>
+
+<div class="body">
+  <div class="pane">
+    <div class="video" id="stage">
+      <img id="stream" alt="監控畫面" style="display:none">
+      <div class="hint" id="hint">選好專案與來源，按「啟動監控」。<br>第一次載入約 10～30 秒。</div>
+      <div class="alarm" id="alert"><b id="alertMsg"></b><button id="btnReset">解除警告</button></div>
     </div>
   </div>
-</main>
+
+  <div class="pane">
+    <div class="title"><span>本輪步驟</span><span class="sub n" id="stepSum"></span></div>
+    <ol class="steps" id="steps"><li class="none">尚未啟動</li></ol>
+  </div>
+
+  <div class="pane">
+    <div class="block" id="warnBlock" style="display:none">
+      <div class="title"><span>需要注意</span></div>
+      <ul class="warns" id="warns"></ul>
+    </div>
+    <div class="block">
+      <div class="title"><span>最近輪次</span><span class="sub" id="histSum"></span></div>
+      <div class="runs" id="strip"></div>
+      <div class="none" id="noRuns">還沒有完成任何一輪</div>
+    </div>
+    <div class="block">
+      <div class="title"><span>流程錯誤次數</span><span class="sub n" id="errTotal"></span></div>
+      <div class="chart" id="errChart"></div>
+      <div class="kinds n" id="kinds"></div>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   const $ = (id) => document.getElementById(id);
-  let running = false, lastAlert = false, audioCtx = null, lastEventCount = 0, streamOn = false;
+  let running = false, lastAlert = false, audioCtx = null, streamOn = false;
+  const startedAt = { t: null };        // 伺服器記的監控開始時間（換台電腦打開網頁也一樣）
 
   function beep() {
     try {
@@ -112,12 +183,15 @@
     const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
     return r.json();
   }
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  const sec = (s) => s == null ? "–" : s >= 60 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : s.toFixed(1);
+  const p2 = (x) => String(x).padStart(2, "0");
 
   async function loadProjects() {
     const d = await api("/api/projects"); const sel = $("project"); const cur = sel.value; sel.innerHTML = "";
     for (const p of d.projects) {
       const o = document.createElement("option"); o.value = p.name;
-      o.textContent = p.name + (p.ok ? (p.steps ? `（${p.steps} 個步驟）` : "（還沒有步驟）") : "（設定檔有問題）");
+      o.textContent = p.name + (p.ok ? (p.steps ? `（${p.steps} 步）` : "（還沒有步驟）") : "（設定檔有問題）");
       o.disabled = !p.ok || !p.steps; sel.appendChild(o);
     }
     if (cur) sel.value = cur;
@@ -129,50 +203,118 @@
     if (on) { img.src = "/stream.mjpg?t=" + Date.now(); img.style.display = "block"; $("hint").style.display = "none"; }
   }
 
+  function tickClock() {
+    const d = new Date();
+    $("clock").textContent = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+    $("today").textContent = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+    const t = running ? startedAt.t : null;
+    $("runFor").textContent = t ? `${p2(t.getHours())}:${p2(t.getMinutes())} 開始監控` : "";
+  }
+  setInterval(tickClock, 1000); tickClock();
+
+  function renderStatus(s) {
+    let level = "", title = "尚未啟動", detail = "選好專案與來源，按「啟動監控」";
+    if (s.error) { level = "alert"; title = "錯誤"; detail = s.error; }
+    else if (s.loading) { level = "wait"; title = "載入中"; detail = s.loading; }
+    else if (running && s.now) { level = s.now.level; title = s.now.title; detail = s.now.detail; }
+    else if (s.finished) { title = "已停止"; detail = s.finished; }
+    $("lamp").className = "lamp " + level; $("nowTitle").textContent = title; $("nowDetail").textContent = detail || "";
+
+    const m = s.model;
+    $("modelName").textContent = m ? m.project : "–"; $("modelName").title = m ? m.project : "";
+    $("modelInfo").textContent = !m ? "" : m.file ? `模型 ${m.trained_at}` : "沒有物品辨識模型";
+
+    const c = s.cycle || {}, inCycle = running && c.elapsed != null;
+    $("timerVal").innerHTML = ""; $("timerVal").append(inCycle ? sec(c.elapsed) : "–");
+    if (inCycle) $("timerVal").appendChild(el("small", "", "秒"));
+    $("timerLimit").textContent = inCycle && c.timeout ? `上限 ${c.timeout} 秒` : "";
+    const r = inCycle && c.timeout ? c.elapsed / c.timeout : 0;
+    $("cellTime").className = "cell" + (r >= 1 ? " over" : r >= .75 ? " late" : "");
+
+    $("avgDur").innerHTML = ""; $("avgDur").append(s.avg_dur != null ? sec(s.avg_dur) : "–");
+    if (s.avg_dur != null) $("avgDur").appendChild(el("small", "", "秒"));
+    const ds = s.dur_stats;
+    $("durInfo").textContent = ds ? `${ds.n} 輪平均` : "";
+    $("cellAvg").title = ds ? `最快 ${sec(ds.min)} 秒、最慢 ${sec(ds.max)} 秒、上一輪 ${sec(ds.last)} 秒` : "只算完成的輪";
+
+    const good = s.cycle_count ?? 0, bad = s.bad_cycle_count ?? 0, tot = good + bad;
+    $("cycles").textContent = good; $("bad").textContent = bad;
+    $("badRate").textContent = tot ? `錯誤率 ${Math.round(bad / tot * 100)}%` : "";
+  }
+
+  function renderSteps(s) {
+    const ol = $("steps"); ol.innerHTML = "";
+    const steps = s.steps || [], c = s.cycle || {};
+    $("stepSum").textContent = c.required_total ? `必要 ${c.required_done} / ${c.required_total}` : "";
+    if (!steps.length) { ol.appendChild(el("li", "none", running ? "載入中…" : "尚未啟動")); return; }
+    steps.forEach((st, i) => {
+      const done = st.state === "done", doing = !done && (st.doing || st.state === "active");
+      const li = el("li", done ? "done" : doing ? "doing" : "todo");
+      li.appendChild(el("span", "no n", String(i + 1)));
+      const name = el("span", "name", st.name); if (!st.required) name.appendChild(el("span", "opt", "選配")); li.appendChild(name);
+      let tag = "";
+      if (done) tag = st.done_at != null ? `✓ ${st.done_at} 秒` : "✓";
+      else if (doing) tag = "正在做";
+      li.appendChild(el("span", "tag n", tag));
+      if (doing && st.acc != null) { const m = el("span", "meter"), f = el("i"); f.style.width = Math.min(100, st.acc / (st.dwell || 1) * 100) + "%"; m.appendChild(f); li.appendChild(m); }
+      ol.appendChild(li);
+    });
+  }
+
+  function renderRight(s) {
+    const warns = running && !s.loading ? (s.warnings || []) : [];
+    $("warnBlock").style.display = warns.length ? "block" : "none";
+    const w = $("warns"); w.innerHTML = ""; for (const t of warns) w.appendChild(el("li", "", t));
+
+    const hist = s.history || [], strip = $("strip"); strip.innerHTML = "";
+    hist.slice().reverse().forEach((h) => {
+      const i = el("i", h.ok ? "" : h.kind === "漏做" ? "bad" : "other", h.ok ? "" : h.kind === "漏做" ? "✕" : "!");
+      i.title = `${h.time} ${h.kind}` + (h.dur != null ? ` ${h.dur} 秒` : "") + (h.missing.length ? ` 缺：${h.missing.join("、")}` : "");
+      strip.appendChild(i);
+    });
+    $("noRuns").style.display = hist.length ? "none" : "block";
+    $("histSum").textContent = hist.length ? `${hist.length} 輪，左舊右新　✕ 漏做　! 超時` : "";
+
+    const chart = $("errChart"); chart.innerHTML = "";
+    const rows = s.miss_by_step || [], maxc = Math.max(1, ...rows.map((x) => x.count));
+    const total = rows.reduce((a, x) => a + x.count, 0);
+    for (const x of rows) {
+      const r = el("div", "r" + (x.count ? "" : " zero")); r.title = `${x.name}：漏做 ${x.count} 次`;
+      r.appendChild(el("span", "lbl", x.name));
+      const tr = el("span", "track"), f = el("i"); f.style.width = (x.count / maxc * 100) + "%"; tr.appendChild(f); r.appendChild(tr);
+      r.appendChild(el("span", "c", String(x.count))); chart.appendChild(r);
+    }
+    if (!rows.length) chart.appendChild(el("div", "none", running ? "載入中…" : "尚未啟動"));
+    $("errTotal").textContent = rows.length ? `漏做 共 ${total} 次` : "";
+    const kc = s.kind_count || {}, extra = [];
+    if (kc["超時"]) extra.push(`超時 ${kc["超時"]} 輪`);
+    if (kc["跳步"]) extra.push(`跳步 ${kc["跳步"]} 輪`);
+    $("kinds").textContent = extra.join("　");
+  }
+
   function render(s) {
+    startedAt.t = s.running && s.started_at ? new Date(s.started_at) : null;
     running = !!s.running;
-    $("btnStart").textContent = running ? "停止監控" : "啟動監控";
-    $("btnStart").className = "big" + (running ? " stop" : "");
-    $("btnStart").disabled = !!(running && s.loading);
-    let st = "尚未啟動";
-    if (s.error) st = "錯誤：" + s.error;
-    else if (s.loading) st = s.loading;
-    else if (running) st = `完成 ${s.cycle_count} 輪　漏做 ${s.bad_cycle_count} 輪　` + (s.alert_active ? "⚠ " + s.alert_message : (s.armed ? "監控中" : "等待下一輪"));
-    else if (s.finished) st = s.finished;
-    $("status").textContent = st;
+    const bs = $("btnStart");
+    bs.textContent = running ? "停止監控" : "啟動監控"; bs.className = running ? "stop" : ""; bs.disabled = !!(running && s.loading);
     $("err").textContent = s.error || "";
     if (s.frame_id > 0) setStream(true);
-    if (!running && !s.frame_id) { $("hint").style.display = "block"; }
-    $("cycles").textContent = s.cycle_count ?? 0; $("bad").textContent = s.bad_cycle_count ?? 0;
-    const ul = $("steps"); ul.innerHTML = "";
-    for (const st of (s.steps || [])) {
-      const li = document.createElement("li"); li.className = st.state;
-      const mark = document.createElement("span"); mark.className = "mark " + st.state; mark.textContent = st.state === "done" ? "✓" : "";
-      const name = document.createElement("span"); name.textContent = st.name + (st.required ? "" : "（選配）");
-      li.appendChild(mark); li.appendChild(name);
-      if (st.state !== "done" && st.acc != null) { const p = document.createElement("span"); p.className = "prog"; p.textContent = `${st.acc.toFixed(1)} / ${st.dwell} 秒`; li.appendChild(p); }
-      ul.appendChild(li);
-    }
-    const al = $("alert"); al.style.display = s.alert_active ? "block" : "none"; al.textContent = s.alert_message || "";
-    $("btnReset").style.display = s.alert_active ? "block" : "none";
+    if (!running && !s.frame_id) $("hint").style.display = "block";
+
+    renderStatus(s); renderSteps(s); renderRight(s); tickClock();
+
+    $("alert").classList.toggle("on", !!s.alert_active);
+    $("alertMsg").textContent = s.alert_message || "";
+    $("stage").classList.toggle("alerting", !!s.alert_active);
     if (s.alert_active && !lastAlert) beep();
     lastAlert = !!s.alert_active;
-    if ((s.n_events || 0) !== lastEventCount) {
-      lastEventCount = s.n_events || 0; const ev = $("events"); ev.innerHTML = "";
-      for (const e of (s.events || []).slice().reverse()) {
-        const li = document.createElement("li");
-        li.className = e.type.startsWith("alert") ? "alert" : (e.type === "cycle_done" || e.type === "step_done") ? "done" : "";
-        const label = { step_done: "完成步驟", cycle_done: "完成一輪", alert_missing: "漏做", alert_skip: "跳步", alert_timeout: "超時", cycle_discarded: "太短不算", armed: "開始等下一輪", reset: "重置" }[e.type] || e.type;
-        li.textContent = `${e.t.toFixed(1)} 秒　${label}　${e.message || ""}`; ev.appendChild(li);
-      }
-    }
   }
 
   async function poll() {
     try {
       if (!$("project").options.length) await loadProjects();
       render(await api("/api/state"));
-    } catch (e) { $("status").textContent = "連不上伺服器"; }
+    } catch (e) { $("lamp").className = "lamp alert"; $("nowTitle").textContent = "連不上伺服器"; $("nowDetail").textContent = "請確認監控程式還開著"; }
     setTimeout(poll, 500);
   }
 
@@ -186,7 +328,7 @@
     streamOn = false;
   };
   $("btnReset").onclick = () => api("/api/reset", {});
-  $("btnShot").onclick = async () => { const d = await api("/api/screenshot", {}); $("status").textContent = d.ok ? "已存截圖：" + d.path : (d.error || "存截圖失敗"); };
+  $("btnShot").onclick = async () => { const d = await api("/api/screenshot", {}); $("nowDetail").textContent = d.ok ? "已存截圖：" + d.path : (d.error || "存截圖失敗"); };
 
   loadProjects(); poll();
 })();

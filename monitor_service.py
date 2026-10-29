@@ -26,6 +26,109 @@ MAX_EVENTS = 60
 DISPLAY_FPS = 25          # 相機來源：顯示執行緒的上限（相機每一格疊上最近一次辨識結果就送，不等辨識跑完）
 
 
+DOING_HOLD_SEC = 0.6      # 步驟累積秒數停止增加後，「正在做」標示再留多久（偵測會閃，避免一閃一閃）
+MAX_HISTORY = 30          # 網頁「最近幾輪」保留的輪數
+LOW_FPS = 3.0             # 辨識速度低於這個值就在網頁提示
+
+
+class CycleTracker:
+    """狀態機只有「現在」，網頁要的歷史在這裡累積：每輪用時與結果、這輪各步驟第幾秒完成、正在做哪一步、各步驟漏做次數。
+    每處理一格呼叫一次 update()（傳入影片／相機時間 t_now 秒）。"""
+
+    def __init__(self, steps):
+        self.steps = list(steps)
+        self.history: list[dict] = []                 # 新的在前
+        self.miss_count: dict[str, int] = {}
+        self.kind_count: dict[str, int] = {"漏做": 0, "超時": 0, "跳步": 0}
+        self.ok_durs: list[float] = []                # 完成的輪：開始到完成的秒數（全部保留，算平均／最快／最慢）
+        self.done_at: dict[int, float] = {}          # 這輪：step_index → 開始後第幾秒完成
+        self.doing: list[int] = []
+        self.cycle_start: float | None = None
+        self.hand_seen_at: float | None = None
+        self._progress_at: dict[int, float] = {}
+        self._prev_acc: dict[int, float] = {}
+        self._prev_observed: set[int] = set()
+        self._prev_counts: tuple[int, int] | None = None     # 第一次 update 只記起始值，不當成剛完成一輪
+        self._prev_alert = False
+        self._prev_idx = 0
+
+    def _record(self, t_now: float, ok: bool, kind: str, missing: list[str]) -> None:
+        dur = round(t_now - self.cycle_start, 1) if self.cycle_start is not None else None
+        self.history.insert(0, {"time": datetime.now().strftime("%H:%M:%S"), "ok": ok, "kind": kind, "dur": dur, "missing": missing})
+        del self.history[MAX_HISTORY:]
+        if ok and dur is not None:
+            self.ok_durs.append(dur)
+        if kind in self.kind_count:
+            self.kind_count[kind] += 1
+        for n in missing:
+            self.miss_count[n] = self.miss_count.get(n, 0) + 1
+
+    def _clear_cycle(self) -> None:
+        self.done_at = {}; self._progress_at = {}; self._prev_acc = {}; self.doing = []; self.cycle_start = None
+
+    def update(self, fsm: SOPStateMachine, t_now: float, hands_seen: bool) -> None:
+        if hands_seen:
+            self.hand_seen_at = t_now
+        checklist = fsm.mode == "checklist"
+        if checklist:
+            observed = set(fsm.observed)
+            if fsm.cycle_active and self.cycle_start is None:
+                self.cycle_start = fsm.cycle_started_at
+            for i, v in fsm.acc_sec.items():
+                if v > self._prev_acc.get(i, 0.0) + 1e-6:
+                    self._progress_at[i] = t_now
+            self._prev_acc = dict(fsm.acc_sec)
+            self.doing = [i for i, t in self._progress_at.items() if t_now - t <= DOING_HOLD_SEC and i not in observed]
+        else:
+            idx = fsm.current_step_idx
+            observed = set(range(idx))
+            if self.cycle_start is None and (idx > 0 or fsm.dwell_sec > 0):
+                self.cycle_start = t_now
+            self.doing = [idx] if fsm.dwell_sec > 0 else []
+        if self.cycle_start is not None:
+            for i in observed - set(self.done_at):
+                self.done_at[i] = round(t_now - self.cycle_start, 1)
+
+        good, bad = fsm.cycle_count, fsm.bad_cycle_count
+        prev_good, prev_bad = self._prev_counts if self._prev_counts is not None else (good, bad)
+        required = [s for s in self.steps if s.required]
+        if good > prev_good:
+            self._record(t_now, True, "完成", []); self._clear_cycle()
+        elif bad > prev_bad:
+            self._record(t_now, False, "漏做", [s.step_name for s in required if s.step_index not in self._prev_observed])
+            self._clear_cycle()
+        elif fsm.alert_active and not self._prev_alert and fsm.alert_type == "alert_timeout":
+            self._record(t_now, False, "超時", [s.step_name for s in required if s.step_index not in observed])
+        elif fsm.alert_active and not self._prev_alert and fsm.alert_type in ("alert_skip",):
+            self._record(t_now, False, "跳步", [])
+        elif checklist and self.cycle_start is not None and not fsm.cycle_active and not fsm.alert_active:
+            self._clear_cycle()                        # 太短不算的一輪、或按了重置
+        if not checklist and fsm.current_step_idx == 0 and self._prev_idx > 0 and good == prev_good:
+            self._clear_cycle()
+        self._prev_counts = (good, bad)
+        self._prev_alert = fsm.alert_active
+        self._prev_observed = observed
+        self._prev_idx = fsm.current_step_idx
+
+    def info(self, t_now: float) -> dict:
+        total = sum(1 for h in self.history if h["kind"] in ("完成", "漏做"))
+        durs = self.ok_durs
+        misses = sorted(self.miss_count.items(), key=lambda kv: -kv[1])
+        return {
+            "elapsed": round(t_now - self.cycle_start, 1) if self.cycle_start is not None else None,
+            "done_at": {str(k): v for k, v in self.done_at.items()},
+            "doing": self.doing,
+            "history": self.history,
+            "avg_dur": round(sum(durs) / len(durs), 1) if durs else None,          # 只算完成的輪（開始到完成）
+            "dur_stats": {"min": min(durs), "max": max(durs), "last": durs[-1], "n": len(durs)} if durs else None,
+            "recent_total": total,
+            "top_missed": [{"name": n, "count": c} for n, c in misses[:5]],
+            "miss_by_step": [{"name": s.step_name, "count": self.miss_count.get(s.step_name, 0)} for s in self.steps if s.required],
+            "kind_count": dict(self.kind_count),
+            "hand_age": round(t_now - self.hand_seen_at, 1) if self.hand_seen_at is not None else None,
+        }
+
+
 def load_camera_source() -> str:
     try:
         with open(CAMERA_SOURCE_FILE, "r", encoding="utf-8-sig") as f:
@@ -50,6 +153,8 @@ class MonitorService:
         self._live = None            # 辨識執行緒最近一次的 (ctx, fsm, state_runner, 辨識 fps)，顯示執行緒拿來疊字
         self._disp_fps = 0.0
         self.project: Project | None = None
+        self.model_info: dict | None = None
+        self.started_at: str | None = None
         self.source_kind = "demo"
         self.loading: str | None = None
         self.error: str | None = None
@@ -88,12 +193,23 @@ class MonitorService:
         else:
             raise ValueError("source_kind 只能是 demo 或 camera")
         with self._lock:
-            self.project = project; self.source_kind = source_kind
+            self.project = project; self.source_kind = source_kind; self.model_info = self._model_info(project)
+            self.started_at = datetime.now().isoformat(timespec="seconds")
             self.loading = "載入中（第一次約 10～30 秒，請等畫面出現）…"; self.error = None; self.finished = None
             self._snap = {}; self._jpeg = None; self._last_vis = None
         self._stop.clear(); self._reset.clear()
         self._thread = threading.Thread(target=self._run, args=(project, src, is_camera_source(src)), daemon=True)
         self._thread.start()
+
+    @staticmethod
+    def _model_info(project: Project) -> dict:
+        """網頁顯示「目前型體（專案）＋物品辨識模型」：模型檔名與最後修改時間（＝訓練好拷進來的時間）。"""
+        path = os.path.join(project.dir_path, "items", "model", "best.pt")
+        info = {"project": project.project_name, "file": None, "trained_at": None}
+        if os.path.isfile(path):
+            info["file"] = os.path.relpath(path, project.dir_path).replace("\\", "/")
+            info["trained_at"] = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")
+        return info
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
@@ -124,7 +240,7 @@ class MonitorService:
         with self._lock:
             d = {"running": self.running, "loading": self.loading, "error": self.error, "finished": self.finished,
                  "project": self.project.project_name if self.project else None, "source_kind": self.source_kind,
-                 "frame_id": self._frame_id}
+                 "frame_id": self._frame_id, "started_at": self.started_at}
             d.update(self._snap)
         return d
 
@@ -153,20 +269,76 @@ class MonitorService:
             self.loading = None
             self._cond.notify_all()
 
-    def _publish_state(self, fsm: SOPStateMachine, frames: int, fps: float) -> None:
+    @staticmethod
+    def _detect_info(fsm: SOPStateMachine, runner, p: Project | None) -> dict | None:
+        """影像上不再畫狀態面板，原本面板上的偵測資訊（盒子開關、看到的物品、結算倒數）改送給網頁。"""
+        if runner is None or not runner.enabled or runner.items is None:
+            return None
+        d = {"items_label": "桌上看到" if runner.fixed_items else "盒內物品",
+             "items": [{"name": n, "conf": round(c, 2)} for n, c in sorted(runner.items_present.items())],
+             "box_open": runner.box_open if (runner.open_closed is not None and runner.region is not None) else "n/a",
+             "end_hold": None}
+        if p is not None and fsm.mode == "checklist" and p.cycle_end is not None and fsm.cycle_active and fsm.end_hold_sec > 0:
+            d["end_hold"] = [round(fsm.end_hold_sec, 1), p.cycle_end.dwell_time_sec]
+        return d
+
+    def _now_text(self, fsm: SOPStateMachine, snap: dict, cyc: dict, p: Project | None, req_done: int, req_total: int) -> dict:
+        """網頁最上方那一句：現在系統在等什麼／作業做到哪。level：alert / run / wait。"""
+        names = {s.step_index: s.step_name for s in fsm.steps}
+        n_next = snap["cycle_count"] + snap["bad_cycle_count"] + 1
+        if snap["alert_active"]:
+            auto = 15 if self.source_kind == "camera" else 3
+            how = "按「解除警告」" + ("或手在重置區停一下" if p is not None and p.reset_zone else "") + f"，{auto} 秒後也會自動解除"
+            return {"level": "alert", "title": snap["alert_message"] or "警告", "detail": how}
+        if not snap["armed"]:
+            return {"level": "wait", "title": "上一輪已結算", "detail": "等工作區清空（盒子／鞋子拿走）後開始下一輪"}
+        if fsm.mode == "checklist" and fsm.cycle_active:
+            if fsm.end_hold_sec > 0 and p is not None and p.cycle_end is not None:
+                left = max(0.0, p.cycle_end.dwell_time_sec - fsm.end_hold_sec)
+                return {"level": "run", "title": f"第 {n_next} 輪收尾中", "detail": f"結束條件成立，{left:.1f} 秒後結算這一輪"}
+            doing = "、".join(names[i] for i in cyc["doing"] if i in names)
+            todo = [s.step_name for s in fsm.steps if s.required and s.step_index not in fsm.observed]
+            detail = f"必要步驟 {req_done}/{req_total}"
+            detail += f"　正在做：{doing}" if doing else (f"　還沒做：{'、'.join(todo)}" if todo else "　步驟都做完了，等這一輪結束")
+            return {"level": "run", "title": f"第 {n_next} 輪進行中", "detail": detail}
+        if fsm.mode != "checklist" and cyc["elapsed"] is not None:
+            cur = fsm.steps[fsm.current_step_idx]
+            return {"level": "run", "title": f"第 {n_next} 輪進行中", "detail": f"目前步驟：{cur.step_name}（{fsm.current_step_idx + 1}/{len(fsm.steps)}）"}
+        return {"level": "wait", "title": "等待開始", "detail": f"作業員開始做任何一個步驟，就計入第 {n_next} 輪"}
+
+    def _publish_state(self, fsm: SOPStateMachine, frames: int, fps: float, runner=None, p: Project | None = None,
+                       cyc: dict | None = None) -> None:
         snap = fsm.snapshot()
+        cyc = cyc or {"elapsed": None, "done_at": {}, "doing": [], "history": [], "avg_dur": None, "recent_total": 0, "top_missed": [], "hand_age": None}
         steps = []
         for s, state in zip(fsm.steps, snap["step_states"]):
             steps.append({"index": s.step_index, "name": s.step_name, "state": state, "required": s.required,
                           "acc": round(fsm.acc_sec.get(s.step_index, 0.0), 2) if fsm.mode == "checklist" else None,
-                          "dwell": s.dwell_time_sec})
-        events = [{"t": round(e.get("t", 0.0), 2), "type": e.get("event_type", ""), "message": e.get("message", ""),
-                   "step_index": e.get("step_index", "")} for e in fsm.events[-MAX_EVENTS:]]
+                          "dwell": s.dwell_time_sec, "doing": s.step_index in cyc["doing"],
+                          "done_at": cyc["done_at"].get(str(s.step_index))})
+        req_total = sum(1 for s in fsm.steps if s.required)
+        req_done = sum(1 for st in steps if st["required"] and st["state"] == "done")
+        events = [{"t": round(e.get("t", 0.0), 2), "clock": (e.get("time_iso") or "")[11:19], "type": e.get("event_type", ""),
+                   "message": e.get("message", ""), "step_index": e.get("step_index", "")} for e in fsm.events[-MAX_EVENTS:]]
+        timeout = p.cycle_timeout_sec if p is not None else None
+        warnings = []
+        if frames > 30 and fps < LOW_FPS:
+            warnings.append(f"辨識速度只有 {fps:.1f} fps，判斷可能會延遲")
+        if cyc["elapsed"] is not None and timeout and cyc["elapsed"] > 0.75 * timeout and not snap["alert_active"]:
+            warnings.append(f"這一輪已經 {cyc['elapsed']:.0f} 秒，超過 {timeout:.0f} 秒會報超時")
+        if cyc["hand_age"] is not None and cyc["hand_age"] > 30:
+            warnings.append(f"已經 {cyc['hand_age']:.0f} 秒沒看到手（作業員不在，或鏡頭被擋住）")
         with self._lock:
             self._snap = {"mode": snap["mode"], "cycle_count": snap["cycle_count"], "bad_cycle_count": snap["bad_cycle_count"],
                           "alert_active": snap["alert_active"], "alert_message": snap["alert_message"], "armed": snap["armed"],
                           "steps": steps, "events": events, "frames": frames, "fps": round(fps, 1), "display_fps": round(self._disp_fps, 1),
-                          "n_events": len(fsm.events)}
+                          "n_events": len(fsm.events), "detect": self._detect_info(fsm, runner, p),
+                          "now": self._now_text(fsm, snap, cyc, p, req_done, req_total),
+                          "cycle": {"elapsed": cyc["elapsed"], "timeout": timeout, "required_done": req_done, "required_total": req_total},
+                          "history": cyc["history"], "avg_dur": cyc["avg_dur"], "top_missed": cyc["top_missed"],
+                          "dur_stats": cyc.get("dur_stats"), "miss_by_step": cyc.get("miss_by_step", []),
+                          "kind_count": cyc.get("kind_count", {}), "model": self.model_info,
+                          "hand_age": cyc["hand_age"], "warnings": warnings}
 
     def _display_loop(self, p: Project, src) -> None:
         """相機來源：相機每一格都疊上最近一次辨識結果、編碼、送出（上限 DISPLAY_FPS）。辨識執行緒另外跑自己的速度，
@@ -182,7 +354,7 @@ class MonitorService:
                 time.sleep(0.02); continue
             last_seq = seq; tick = time.perf_counter()
             ctx, fsm, runner, rec_fps = live
-            vis = _draw_dev_overlay(frame, p, fsm, ctx, f"辨識 {rec_fps:.1f} fps  畫面 {self._disp_fps:.1f} fps", runner)
+            vis = _draw_dev_overlay(frame, p, fsm, ctx, "", runner, boxes_only=True)
             self._publish_frame(vis)
             n += 1; el = time.perf_counter() - t0
             if el >= 1.0:
@@ -195,6 +367,7 @@ class MonitorService:
         tracker = None; async_det = None; src = None
         try:
             fsm = SOPStateMachine(p, error_log_dir=os.path.join(p.dir_path, "error_logs"), sound_enabled=False)
+            tracker_c = CycleTracker(p.steps)
             self._set_loading("載入中 1/4：手部模型…")
             tracker = HandTracker(HAND_MODEL)
             scene = SceneTracker(p.anchors, tuple(p.work_area) if p.work_area else None)
@@ -289,9 +462,10 @@ class MonitorService:
                 el = time.perf_counter() - wall0; rec_fps = frames / el if el else 0.0
                 with self._lock:
                     self._live = (ctx, fsm, state_runner, rec_fps)
-                self._publish_state(fsm, frames, rec_fps)
+                tracker_c.update(fsm, t_now, bool(points))
+                self._publish_state(fsm, frames, rec_fps, state_runner, p, tracker_c.info(t_now))
                 if disp is None:                             # 影片檔：沒有顯示執行緒，處理完的格直接送
-                    self._publish_frame(_draw_dev_overlay(frame, p, fsm, ctx, f"{rec_fps:.1f} fps", state_runner))
+                    self._publish_frame(_draw_dev_overlay(frame, p, fsm, ctx, "", state_runner, boxes_only=True))
                 if not is_camera:
                     due = wall0 + t_now - time.perf_counter()
                     if due > 0:
