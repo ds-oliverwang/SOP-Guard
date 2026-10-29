@@ -1,0 +1,22 @@
+# 本機設定（含相機帳密、網頁密碼）
+camera_source.txt
+web_password.txt
+
+# 影片、專案資料、快取、訓練輸出
+sop_projects/
+cache/
+runs/
+*.mp4
+*.avi
+run_inner.txt
+run_outer.txt
+
+# 模型權重（依 models/README.md 下載）
+models/*
+!models/README.md
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
